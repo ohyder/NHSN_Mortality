@@ -1,8 +1,17 @@
 
 /* SAS code ran on Base SAS 9.4 on local machine */
-/* Anesthesiology July 2025 Submissions Elective vs non-elective mortality */
+
+/* ~ 1500 lines */
+
+/* Enrichment Analysis and Proportional Mortality Analysis Macros are near the end */
+
+/* Enrichment and PMA analyses Last tested to run on 9/5/2025 */
+
+/* For the rest probably 99% runs without issue but there maybe blocks from the initial analysis runs which may need tweaking to run */
+
+/* Anesthesiology July 2025 Submission and September 2025 Revise and Resubmit Elective vs non-elective mortality */
 /* Hospital data is already merged into the core files */
-/* CCSR Procedure class info from https://hcup-us.ahrq.gov/toolssoftware/procedureicd10/procedure_icd10.jsp */
+/* Procedure classification Refined info from https://hcup-us.ahrq.gov/toolssoftware/procedureicd10/procedure_icd10.jsp */
 /* /d is diabling code blocks from accidentally running and overwriting datasets. Remove before execution */
 
 Libname Tempo ''; /* Enter your library name here */
@@ -32,16 +41,16 @@ run;
 /* Add formats for ICD-10 Procedure Codes */
 /* Import CSV file and create SAS format for ICD-10-PCS codes */
 
-/* /d Step 1: Import the CSV file 
-proc import datafile="C:\Users\***\PClassR.csv" /* Enter path to your CSV file */
+/* Step 1: Import the CSV file */
+proc import datafile="C:\Users\hyder\Documents\Research\Anesthesiology Elective Mortality Data Folder\TempforNIS\PClassR_Omar.csv"
     out=format_data
     dbms=csv
     replace;
     getnames=yes;
-run;*/
+run;
 
 /* Step 2: Prepare data for PROC FORMAT */
-/* /d 
+
 data tempo.format_input;
     set format_data;
     
@@ -58,14 +67,14 @@ data tempo.format_input;
     keep fmtname type start label;
 run;
 
-/* Step 2a (optional): Remove duplicate codes (keep first occurrence) 
-proc sort data=format_input nodupkey;
+/* Step 2a (optional): Remove duplicate codes (keep first occurrence) */
+proc sort data=tempo.format_input nodupkey;
     by start;
-run;*/
+run;
 
 /* Step 3: Create the format */
-/* format i10_pr1 $proccode.; */
-/* /d
+/* format i10_pr1 $proccode.; */ 
+
 proc format cntlin=tempo.format_input;
 run;
 
@@ -73,7 +82,7 @@ run;
 /* https://www.cdc.gov/nhsn/xls/icd10-pcs-pcm-nhsn-opc.xlsx */
 
 /* /d
-proc import datafile="C:\Users\***\NHSN Codes.xlsx" 
+proc import datafile="C:\Users\hyder\Partners HealthCare Dropbox\Omar Hyder\Research\Anesthesiology Elective Mortality\NHSN Codes.xlsx"
     out=icd10_lookup
     dbms=xlsx
     replace;
@@ -137,7 +146,7 @@ run;*/
 
 
 
-/* This is the proc sql method - takes a while to run but crosschecks correctly */
+/* This is the proc sql method - takes a while to run */
 /* /d
 data nis_temp; set tempo.nis_Core_202122;
 run;
@@ -191,7 +200,7 @@ proc import datafile="C:\Users\hyder\Partners HealthCare Dropbox\Omar Hyder\Rese
 run;
 
 /* Then process it to set proper lengths and clean up for format creation */
-data ICDdx;
+data tempo.ICDdx;
     set ICDdx_raw;
     
     /* Clean up the variables if needed */
@@ -204,7 +213,7 @@ run;
 
 /* Now create the format input dataset */
 data format_input;
-    set ICDdx;
+    set tempo.ICDdx;
     fmtname = 'ICDDX';
     start = Code;
     label = LongDescription;
@@ -272,12 +281,43 @@ if i10_pr&i in
 %end;
 %mend;
 %cath;
+if age lt 18 then delete; *delete non-adults;
+IF LOS LT 0 THEN LOS=.; *Setting negative LOS to missing;
 RUN;
 
 proc freq data=nis_core_1;
 where i10_Delivery ne 1;
 tables coronarycath elective*died;
 run;
+
+
+/********Missingness and patterns of missingness******/
+
+PROC FREQ DATA=NIS_CORE_1;
+TABLES LOS DIED PRDAY1;
+RUN;
+
+DATA temp_missing;
+    SET NIS_CORE_1;
+    miss_prday1 = (PRDAY1 = .);
+    miss_died = (DIED = .);
+    miss_los = (LOS = .);
+RUN;
+
+/* Test if missingness patterns are random */
+PROC LOGISTIC DATA=temp_missing;
+    MODEL miss_prday1 = DIED LOS;
+    TITLE "Test if PRDAY1 missingness depends on other variables";
+RUN;
+
+PROC LOGISTIC DATA=temp_missing;
+    MODEL miss_died = PRDAY1 LOS;
+    TITLE "Test if DIED missingness depends on other variables";
+RUN;
+
+/* This analysis shows that 1.7% of PRDAY1 is missing. 0.01% of LOS and Died are missing */
+/* This missingness in PRDAY1 with regard to the other two is MCAR while DIED and LOS are NMCAR */
+/* This makes sense because likely records missing LOS and died are missing other data */
 
 
 /********Cleaned data********/
@@ -288,14 +328,13 @@ performed on the date of admission, there were no emergency
 room charges, no emergency department arrival time was noted, 
 and the condition code field did not indicate that the patient 
 received treatment in the facility’s emergency department */
-
 /*********Exclusions*********/
 
 
 Data tempo.nis_core_2;
 set NIS_CORE_1;
 
-if year=2021 then DELETE; *2021 got dropped off somewhere during the initial merge but I will redelete it anyway;
+if year=2021 then DELETE; *2021 got dropped off during the initial merge but I will redelete it anyway;
 
 * Creating prCCS: the main procedure ICD10 columnn for CCS data. If i10_pr1 has a code c/w CCS 3 or 4 then that ports to prCCS;
 * If i10_pr1 doesn't have a relevant code then it looks down the line to see where it appears. Then ports it to prmain;
@@ -365,7 +404,7 @@ if -10 le prday1 lt 0 then prd_marker=0;
 if prday1 = 0 then prd_marker=1;
 if prday1 gt 0 then prd_marker=2;
 
-if age lt 18 then delete; *delete non-adults;
+
 
 if died lt 0 then delete; *delete patients with missing info on vital status;
 
@@ -397,10 +436,35 @@ Tables died*elective_surgery/norow nocum;
 run;
 
 PROC SURVEYFREQ DATA=tempo.nis_core_2;
-	TABLES elective_surgery/cl; * elective vs non-elective surgeries;
+	TABLES elective_surgery female race/cl; * elective vs non-elective surgeries - supple table 1;
     WEIGHT DISCWT;
     CLUSTER HOSP_NIS ;
     STRATA NIS_STRATUM ;
+run;
+
+/* The proc means are not survey weighted because for this calculation survey weighting gives the exact same numbers and makes median and IQR much more complex  */
+PROC MEANS DATA=TEMPO.NIS_CORE_2 P25 P50 P75; *Overall age for suppl table 1;
+    var age;
+run;
+
+PROC MEANS DATA=TEMPO.NIS_CORE_2 P25 P50 P75; *LOS among elective and survived for suppl table 1;
+where elective_surgery=1 and died=0;
+var los;
+run;
+
+PROC MEANS DATA=TEMPO.NIS_CORE_2 P25 P50 P75; *LOS among elective and died for suppl table 1;
+where elective_surgery=1 and died=1;
+var los;
+run;
+
+PROC MEANS DATA=TEMPO.NIS_CORE_2 P25 P50 P75; *LOS among elective and survived for suppl table 1;
+where elective_surgery=0 and died=0;
+var los;
+run;
+
+PROC MEANS DATA=TEMPO.NIS_CORE_2 P25 P50 P75; *LOS among non-elective and died for suppl table 1;
+where elective_surgery=0 and died=1;
+var los;
 run;
 
 PROC SURVEYFREQ DATA=tempo.nis_core_2;
@@ -441,11 +505,19 @@ PROC SURVEYFREQ DATA=tempo.nis_core_2;
     STRATA NIS_STRATUM ;
 run;
 
-proc freq data=tempo.nis_core_2;
-tables year;
+
+PROC SURVEYFREQ DATA=TEMPO.NIS_CORE_2;
+WHERE ELECTIVE_SURGERY=0;
+TABLES PRDAY1/cl;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+RUN;
+
+PROC MEANS DATA=TEMPO.NIS_CORE_2 P25 P50 P75; *Overall LOS for suppl table 1;
+	CLASS ELECTIVE_SURGERY;
+    var los;
 run;
-
-
 /* Frequency of procedures by Epstein et al.'s methodology*/
 /* Not included in results because of similar results to their supplemental tables */
 /* /d
@@ -545,23 +617,10 @@ where cat_i10_pr1 = ''; run;
 
 
 
-                        _
-                       | \
-                       | |
-                       | |
-  |\                   | |
- /, ~\                / /
-X     `-.....-------./ /
- ~-. ~  ~              |
-    \             /    |
-     \  /_     ___\   /
-     | /\ ~~~~~   \ |
-     | | \        || |
-     | |\ \       || )
-    (_/ (_/      ((_/
-
+                        
 /*  				 */
 /* DATA CUT FOR NHSN */
+/* 					 */
 
 /*Separating the AHRQ and NHSN Datasets */
 
@@ -608,8 +667,9 @@ run;
 /* 	PRMAINCAT_D IS THE NSHN CLASS VARIBALE WITH CERTAIN CATEGORIES COMBINED */ 
 
 PROC FREQ DATA=TEMPO.NIS_CORE_NHSN order=freq;
-TABLES PRMAINCAT_d year elective_surgery_n*died/nocol nopercent nocum;
+TABLES PRMAINCAT_d PRDAY1 year elective_surgery_n*died/nocol nopercent nocum;
 RUN;
+
 /* Overall number of patients and mortality rate */
 PROC surveyFREQ DATA=tempo.nis_core_nhsn ;
 where elective_surgery_n=1;
@@ -641,11 +701,28 @@ tables died/cl chisq; *This is here for Chi square calculation. The %s are not r
     STRATA NIS_STRATUM ;
 run;
 
+PROC surveyFREQ DATA=tempo.nis_core_nhsn ;
+tables ELECTIVE_SURGERY_N/CL; *Supp table 1 - proprtion deaths for elective and non-elective;
+	WHERE DIED=1;
+	WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+PROC FREQ DATA=TEMPO.NIS_CORE_nhsn;
+TABLES DIED*ELECTIVE_SURGERY_N/NOROW NOCUM NOPERCENT;
+RUN;
+
 /* Calculating DOS and median LOS */
 PROC FREQ DATA=TEMPO.NIS_CORE_NHSN ORDER=FREQ;
+WHERE ELECTIVE_SURGERY_N=0;
 TABLES PRMAIND;
 RUN;
 
+PROC MEANS DATA=TEMPO.NIS_CORE_NHSN P25 P50 P75; *Overall LOS for suppl table 1;
+	CLASS ELECTIVE_SURGERY_N;
+    var los;
+run;
 
 PROC MEANS DATA=TEMPO.NIS_CORE_NHSN P25 P50 P75;
 	WHERE ELECTIVE_SURGERY_N=1;
@@ -659,6 +736,90 @@ PROC MEANS DATA=TEMPO.NIS_CORE_NHSN P25 P50 P75;
     var los;
 run;
 
+/* Suppl table 1 */
+PROC SURVEYFREQ DATA=tempo.nis_core_nhsn;
+	TABLES elective_surgery_n female race/cl; * elective vs non-elective surgeries - supple table 1;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+/* The proc means are not survey weighted because for this calculation survey weighting gives the exact same numbers and makes median and IQR much more complex  */
+PROC MEANS DATA=TEMPO.nis_core_nhsn P25 P50 P75; *Overall age for suppl table 1;
+    var age;
+run;
+
+PROC MEANS DATA=TEMPO.nis_core_nhsn P25 P50 P75; *LOS among elective and survived for suppl table 1;
+where elective_surgery_n=1 and died=0;
+var los;
+run;
+
+PROC MEANS DATA=TEMPO.nis_core_nhsn P25 P50 P75; *LOS among elective and died for suppl table 1;
+where elective_surgery_n=1 and died=1;
+var los;
+run;
+
+PROC MEANS DATA=TEMPO.nis_core_nhsn P25 P50 P75; *LOS among elective and survived for suppl table 1;
+where elective_surgery_n=0 and died=0;
+var los;
+run;
+
+PROC MEANS DATA=TEMPO.nis_core_nhsn P25 P50 P75; *LOS among non-elective and died for suppl table 1;
+where elective_surgery_n=0 and died=1;
+var los;
+run;
+
+PROC SURVEYFREQ DATA=tempo.nis_core_nhsn;
+	TABLES died/cl; * died vs survived;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+PROC SURVEYFREQ DATA=tempo.nis_core_nhsn;
+	WHERE elective_surgery_n=1;
+	TABLES died/cl; *died after elective admission;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+PROC SURVEYFREQ DATA=tempo.nis_core_nhsn;
+	WHERE elective_surgery_n=0;
+	TABLES died/cl; *died after non-elective admission;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+PROC SURVEYFREQ DATA=tempo.nis_core_nhsn;
+	where died=1;
+	TABLES elective_surgery_n/cl; *died after non-elective admission;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+PROC SURVEYFREQ DATA=tempo.nis_core_nhsn;
+	TABLES died*elective_surgery_n/nopercent;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+
+PROC SURVEYFREQ DATA=TEMPO.nis_core_nhsn;
+WHERE elective_surgery_n=0;
+TABLES PRDAY1/cl;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+RUN;
+
+PROC MEANS DATA=TEMPO.nis_core_nhsn P25 P50 P75; *Overall LOS for suppl table 1;
+	CLASS elective_surgery_n;
+    var los;
+run;
 /* This generates data for the top 15 procedures chart */
 
 PROC surveyFREQ DATA=tempo.nis_core_nhsn ;
@@ -750,10 +911,10 @@ run;
 
 /* Enrichment Macros Elective vs Non-elective for procedures */
 %macro enrich_by_elective_proc(
-    group=,              /* Procedure group: e.g., COLO, CARD */
-    out=,                /* Output dataset name */
-    min_pct_non=0.003,    /* Minimum pct in non-elective group */
-    min_pct_elect=0.3   /* Minimum pct in elective group */
+    group=,               /* Procedure group: e.g., COLO, CARD */
+    out=,                 /* Output dataset name */
+    min_pct_non=0.003,    /* Minimum % in non-elective group */
+    min_pct_elect=0.003   /* Minimum % in elective group */
 );
 
     /* Step 1: Subset and reshape */
@@ -786,39 +947,55 @@ run;
         var count;
     run;
 
-    /* Step 4: Calculate group totals */
+    /* Step 4: Total denominators */
     proc sql noprint;
         select count(*) into :n_non from pr_group_data where elective_surgery_n = 0;
         select count(*) into :n_elect from pr_group_data where elective_surgery_n = 1;
     quit;
 
-    /* Step 5: Compute statistics and filter */
+    /* Step 5: Compute RR, enrichment, 95% CI */
     data &out;
         set pr_pivot;
-        count_0 = coalesce(count_0, 0);  /* Non-elective */
-        count_1 = coalesce(count_1, 0);  /* Elective */
+        count_0 = coalesce(count_0, 0);   /* Non-elective */
+        count_1 = coalesce(count_1, 0);   /* Elective */
 
-        pct_non_elective = count_0 / &n_non;
-        pct_elective     = count_1 / &n_elect;
+        n0 = &n_non;
+        n1 = &n_elect;
 
+        pct_non_elective = count_0 / n0;
+        pct_elective     = count_1 / n1;
+
+        /* Risk ratio */
         if pct_elective > 0 then risk_ratio = pct_non_elective / pct_elective;
         else risk_ratio = .;
 
         enrichment = pct_non_elective - pct_elective;
 
+        /* 95% CI for log(RR) */
+        if count_0 > 0 and count_1 > 0 and n0 > 0 and n1 > 0 then do;
+            log_rr = log(risk_ratio);
+            se_log_rr = sqrt((1/count_0) - (1/n0) + (1/count_1) - (1/n1));
+            lower_rr = exp(log_rr - 1.96 * se_log_rr);
+            upper_rr = exp(log_rr + 1.96 * se_log_rr);
+        end;
+        else do;
+            lower_rr = .;
+            upper_rr = .;
+        end;
+
+        /* Filtering */
         if (pct_non_elective >= &min_pct_non or pct_elective >= &min_pct_elect) and
-           (risk_ratio >= 10 or risk_ratio <= 0.1);
+           (risk_ratio >= 5 or risk_ratio <= 0.1);
 
-        format prcode $proccode.
-               pct_: percent8.2
-               risk_ratio enrichment 8.3;
+           format prcode $proccode.
+            pct_: percent8.2
+            risk_ratio lower_rr upper_rr enrichment 8.3;
 
-        keep prcode pct_non_elective pct_elective risk_ratio enrichment;
+        keep prcode pct_non_elective pct_elective risk_ratio lower_rr upper_rr enrichment;
     run;
 
 %mend;
 
-/* Optimized for three procedures */
 %enrich_by_elective_proc(group=CRNS, out=pr_CRNS_enrich, min_pct_non=0.05);
 proc print data=pr_CRNS_enrich; run;
 
@@ -831,12 +1008,12 @@ proc print data=pr_SB_enrich; run;
 %enrich_by_elective_proc(group=XLAP, out=pr_XLAP_enrich, min_pct_non=0.0039);
 proc print data=pr_XLAP_enrich; run;
 
-%enrich_by_elective_proc(group=CARD, out=pr_CARD_enrich, min_pct_non=0.0005);
+%enrich_by_elective_proc(group=CARD, out=pr_CARD_enrich, min_pct_non=0.001);
 proc print data=pr_CARD_enrich; run;
 
 
-/* Enrichment elective vs non-elective for Diagnoses */
 
+/* Enrichment elective vs non-elective for Diagnoses */
 %macro enrich_by_elective_status(
     group=,              /* Procedure group: e.g., COLO, CARD */
     out=,                /* Output dataset name */
@@ -844,6 +1021,7 @@ proc print data=pr_CARD_enrich; run;
     min_pct_elect=0.03   /* Minimum pct in elective group */
 );
 
+    /* Step 1: Subset and reshape */
     data group_data;
         set tempo.nis_core_NHSN;
         where PRMAINCAT_D = "&group" and elective_surgery_n in (0,1);
@@ -858,46 +1036,67 @@ proc print data=pr_CARD_enrich; run;
         keep elective_surgery_n dxcode;
     run;
 
-    /* Frequency calculation */
+    /* Step 2: Frequency calculation */
     proc freq data=group_data noprint;
         tables dxcode * elective_surgery_n / out=dx_freq(drop=percent);
     run;
 
+    /* Step 3: Pivot frequencies */
     proc transpose data=dx_freq out=dx_pivot prefix=count_;
         by dxcode;
         id elective_surgery_n;
         var count;
     run;
 
+    /* Step 4: Calculate group totals */
     proc sql noprint;
         select count(*) into :n_non from group_data where elective_surgery_n = 0;
         select count(*) into :n_elect from group_data where elective_surgery_n = 1;
     quit;
 
+    /* Step 5: Compute statistics including 95% CI for RR */
     data &out;
         set dx_pivot;
-        count_0 = coalesce(count_0, 0);
-        count_1 = coalesce(count_1, 0);
+        count_0 = coalesce(count_0, 0);  /* Non-elective */
+        count_1 = coalesce(count_1, 0);  /* Elective */
 
-        pct_non_elective = count_0 / &n_non;
-        pct_elective     = count_1 / &n_elect;
+        n0 = &n_non;
+        n1 = &n_elect;
 
+        pct_non_elective = count_0 / n0;
+        pct_elective     = count_1 / n1;
+
+        /* Risk Ratio and Enrichment */
         if pct_elective > 0 then risk_ratio = pct_non_elective / pct_elective;
         else risk_ratio = .;
 
         enrichment = pct_non_elective - pct_elective;
 
+        /* 95% Confidence Interval using Wald method */
+        if count_0 > 0 and count_1 > 0 and n0 > 0 and n1 > 0 then do;
+            log_rr = log(risk_ratio);
+            se_log_rr = sqrt((1/count_0) - (1/n0) + (1/count_1) - (1/n1));
+            lower_rr = exp(log_rr - 1.96 * se_log_rr);
+            upper_rr = exp(log_rr + 1.96 * se_log_rr);
+        end;
+        else do;
+            lower_rr = .;
+            upper_rr = .;
+        end;
+
+        /* Apply filtering */
         if (pct_non_elective >= &min_pct_non or pct_elective >= &min_pct_elect) and
-           (risk_ratio >= 10 or risk_ratio <= 0.1);
+           (risk_ratio >= 5 or risk_ratio <= 0.1);
 
         format dxcode $icddx.
                pct_: percent8.2
-               risk_ratio enrichment 8.3;
+               risk_ratio lower_rr upper_rr enrichment 8.3;
 
-        keep dxcode pct_non_elective pct_elective risk_ratio enrichment;
+        keep dxcode pct_non_elective pct_elective risk_ratio lower_rr upper_rr enrichment;
     run;
 
 %mend;
+
 
 /* Optimized for four diagnoses (because overlap) */
 %enrich_by_elective_status(group=CRNS, out=dx_CRNS_enrich, min_pct_non=0.0022);
@@ -912,19 +1111,27 @@ proc print data=DX_SB_enrich; run;
 %enrich_by_elective_status(group=XLAP, out=dx_XLAP_enrich, min_pct_non=0.0014);
 proc print data=DX_XLAP_enrich; run;
 
-%enrich_by_elective_status(group=CARD, out=dx_CARD_enrich, min_pct_non=0.0009);
+%enrich_by_elective_status(group=CARD, out=dx_CARD_enrich, min_pct_non=0.001);
 proc print data=DX_CARD_enrich; run;
 
-/* Sensitivity analysis */
-/* Restricting the cohort to those who had surgery on day of admission */
+/* Sensitivity analyses data cuts */
 
+/* Restricting the cohort to patients with LOS >=2 to line up with Epstein et al.'s two nights */
 DATA tempo.nis_core_sns; SET tempo.nis_core_nhsn;
 if los lt 2 then delete;
 run;
 
+/* Restricting the cohort to those who had surgery on day of admission */
 DATA tempo.nis_core_adm; SET tempo.nis_core_nhsn;
 if prmaind gt 0 then delete;
 run;
+
+/* Revision 1 request - analyzing the cohort by keeping the default AHRQ definition of elective */
+DATA tempo.nis_core_elect; set tempo.nis_core_nhsn; 
+elective_AHRQ=0;
+if elective=1 then elective_AHRQ=1;
+run;
+
 
 /* Overall number of patients and mortality rate */
 
@@ -1074,6 +1281,143 @@ run;
 %run_pma_analysis(data=tempo.nis_core_NHSN, out=pma_results_NHSN);*Full NHSN dataset;
 %run_pma_analysis(data=tempo.nis_core_sns, out=pma_results_sns); *LOS >=2;
 %run_pma_analysis(data=tempo.nis_core_adm, out=pma_results_adm); *Surgery on day of admission;
+
+/* Sensitivity analysis setup to do PMA by default elective definition */
+%macro run_pma_analysis_elect(data=, out=final_pma_output);
+
+PROC surveyFREQ DATA=&data;
+where elective_ahrq=1;
+tables died/CL;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+PROC surveyFREQ DATA=&data;
+where elective_ahrq=0;
+tables died/CL;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+PROC surveyFREQ DATA=&data;
+tables died*elective_ahrq/cl chisq;
+    WEIGHT DISCWT;
+    CLUSTER HOSP_NIS ;
+    STRATA NIS_STRATUM ;
+run;
+
+    /* Step 1: Count deaths and total procedures by elective status and procedure */
+    proc freq data=&data;
+        tables elective_ahrq*prmaincat_d*died / out=counts noprint;
+    run;
+
+    /* Step 2: Summarize deaths and totals per procedure group */
+    proc sort data=counts;
+        by elective_ahrq prmaincat_d died;
+    run;
+
+    data pma_step1;
+        set counts;
+        by elective_ahrq prmaincat_d died;
+        retain deaths total;
+
+        if first.prmaincat_d then do;
+            deaths = .; total = 0;
+        end;
+
+        total + count;
+        if died = 1 then deaths = count;
+
+        if last.prmaincat_d then output;
+
+        keep elective_ahrq prmaincat_d deaths total;
+    run;
+
+    /* Step 3: Calculate total deaths and volume per elective group */
+    proc sql;
+        create table pma_step2 as
+        select a.*, 
+               b.total_deaths,
+               b.total_procs
+        from pma_step1 as a
+        left join (
+            select elective_ahrq,
+                   sum(deaths) as total_deaths,
+                   sum(total)  as total_procs
+            from pma_step1
+            group by elective_ahrq
+        ) as b
+        on a.elective_ahrq = b.elective_ahrq;
+    quit;
+
+    /* Step 4: Compute proportional mortality metrics */
+    data proportional_mortality_strat;
+        set pma_step2;
+
+        death_pct  = deaths / total_deaths;
+        volume_pct = total / total_procs;
+        pma_score  = death_pct - volume_pct;
+
+        format death_pct volume_pct pma_score percent8.2;
+    run;
+
+    /* Step 5: Chi-square test of association within each procedure */
+    proc sort data=&data out=nis_sorted;
+        by prmaincat_d;
+    run;
+
+    ods exclude all;
+    ods output ChiSq=chi_by_proc;
+
+    proc freq data=nis_sorted;
+        by prmaincat_d;
+        tables elective_ahrq*died / chisq;
+    run;
+
+    ods exclude none;
+
+    /* Step 6: Extract p-values per procedure */
+    data chi_pvals;
+        set chi_by_proc;
+        where Statistic = "Chi-Square";
+        keep prmaincat_d Prob;
+        rename Prob = p_value;
+    run;
+
+    /* Step 7: Combine PMA metrics and significance results */
+    proc sql;
+        create table &out as
+        select a.*, b.p_value
+        from proportional_mortality_strat as a
+        left join chi_pvals as b
+        on a.prmaincat_d = b.prmaincat_d;
+    quit;
+
+    /* Step 8: Print results */
+    proc sort data=&out;
+        by elective_ahrq descending pma_score;
+    run;
+
+    proc print data=&out noobs label;
+        var elective_ahrq prmaincat_d deaths total death_pct volume_pct pma_score p_value;
+        label
+            elective_ahrq = "Elective Status"
+            prmaincat_d        = "Procedure Category"
+            deaths             = "Deaths"
+            total              = "Total Procedures"
+            death_pct          = "Death % (within group)"
+            volume_pct         = "Volume % (within group)"
+            pma_score          = "Over-/Under-Rep in Deaths"
+            p_value            = "Chi-square p-value (by procedure)";
+        format death_pct volume_pct pma_score percent8.2 p_value pvalue6.4;
+    run;
+
+%mend;
+
+%run_pma_analysis_elect(data=tempo.nis_core_elect, out=pma_results_elect); *Surgery on day of admission;
+
 
 /* This is trying to figure out what the reposition of small bowel, open approach code means for real life clnical terminology */
 /* Step 1: Flag patients with 0DS80ZZ in any i10_pr1–i10_pr15 */
