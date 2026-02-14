@@ -1455,3 +1455,46 @@ run;
 /* 	Most likely small bowel resection with anastomosis because there 
 	are codes for resection but none for anastomosis and it makes
 	clinical sense for SB surgery, consistent with what Tim thought */
+
+
+/***********************************************/
+/* Bonferroni Correction data for Chi square  ***/
+/* 20 comparisons for PMA data to crossvalidate */
+/* that the macro calcualtions were correct 	*/
+/* Only considering top 10 non-elective surgical*/
+/************************************************/
+
+proc freq data=tempo.nis_core_NHSN order=freq; 
+where elective_surgery_n ne 1;
+tables prmaincat_d;run;
+
+data nis_core_NHSN_bf; set tempo.nis_core_NHSN;
+if PRMAINCAT_d in ('CSEC', 
+'FX',
+'CHOL',
+'AMP',
+'HPRO',
+'CRNS',
+'CARD',
+'CREC',
+'SPNE',
+'XLAP') and elective_surgery_n ne 1 then output; run;
+
+/* 1. Run Chi-Square and output p-values */
+ods output ChiSq=allchisq;
+proc freq data=nis_core_NHSN_bf;
+    tables prmaincat_d*died / chisq;
+run;
+
+/* 2. Format data for PROC MULTTEST (requires p-values in a variable named raw_p) */
+data pvalues;
+    set allchisq;
+    /* Only keep the Pearson Chi-Square p-value row */
+    if statistic = 'Chi-Square'; 
+    raw_p = prob; 
+    keep raw_p;
+run;
+
+/* 3. Apply Bonferroni Adjustment using INPVALUES= */
+proc multtest inpvalues=pvalues bon;
+run;
